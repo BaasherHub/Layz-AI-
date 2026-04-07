@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PromptForge — lazy input → precise output</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0A0A0B;
+    --surface: #111114;
+    --border: #222228;
+    --gold: #E6C37A;
+    --gold-dim: #b8965a;
+    --text: #F0EDE8;
+    --muted: #6B6B75;
+    --green: #4ADE80;
+    --red: #f87171;
+    --radius: 6px;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+    padding: 0 16px 80px;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  /* SVG noise texture overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    background-size: 256px 256px;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.6;
+  }
+
+  /* Grid lines */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(230,195,122,0.018) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(230,195,122,0.018) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Ambient glow top */
+  .glow-top {
+    position: fixed;
+    top: -200px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 700px;
+    height: 450px;
+    background: radial-gradient(ellipse, rgba(230,195,122,0.07) 0%, transparent 68%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap {
+    max-width: 800px;
+    margin: 0 auto;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── HEADER ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 28px 0 32px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 36px;
+  }
+
+  .logo { display: flex; flex-direction: column; gap: 3px; }
+
+  .logo-name {
+    font-family: 'Syne', sans-serif;
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: var(--text);
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .logo-name .bolt { font-size: 20px; animation: flicker 4s ease-in-out infinite; }
+
+  @keyframes flicker {
+    0%,100% { opacity:1; } 48% { opacity:1; } 50% { opacity:0.35; }
+    52% { opacity:1; } 94% { opacity:1; } 96% { opacity:0.55; } 98% { opacity:1; }
+  }
+
+  .logo-tag { font-size: 10px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  .logo-tag span { color: var(--gold); }
+
+  .header-right { display: flex; align-items: center; gap: 10px; }
+
+  .gear-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+    transition: border-color 0.2s, color 0.2s, transform 0.35s;
+  }
+  .gear-btn:hover { border-color: var(--gold); color: var(--gold); }
+  .gear-btn.active { transform: rotate(60deg); border-color: var(--gold); color: var(--gold); }
+
+  /* ── STATUS BADGE ── */
+  .status-badge {
+    font-size: 10px; letter-spacing: 0.08em;
+    padding: 3px 9px; border-radius: 100px;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .status-badge.key-set { background: rgba(74,222,128,0.1); border: 1px solid rgba(74,222,128,0.25); color: var(--green); }
+  .status-badge.key-missing { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.22); color: var(--red); }
+
+  /* ── API KEY PANEL ── */
+  .api-panel {
+    overflow: hidden; max-height: 0; opacity: 0;
+    transition: max-height 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.3s, margin-bottom 0.3s;
+    margin-bottom: 0;
+  }
+  .api-panel.open { max-height: 160px; opacity: 1; margin-bottom: 24px; }
+
+  .api-panel-inner {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px 20px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .api-panel-inner label { font-size: 10px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
+
+  .api-row { display: flex; gap: 8px; }
+
+  .api-panel input {
+    flex: 1; background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text);
+    font-family: 'Space Mono', monospace; font-size: 12px;
+    padding: 8px 12px; outline: none; transition: border-color 0.2s;
+  }
+  .api-panel input:focus { border-color: var(--gold); }
+
+  .api-save-btn {
+    background: var(--gold); color: #000; border: none;
+    border-radius: var(--radius); font-family: 'Space Mono', monospace;
+    font-size: 11px; font-weight: 700; padding: 8px 16px;
+    cursor: pointer; transition: opacity 0.2s; letter-spacing: 0.05em;
+    white-space: nowrap;
+  }
+  .api-save-btn:hover { opacity: 0.85; }
+
+  .api-note { font-size: 10px; color: var(--muted); line-height: 1.5; }
+  .api-note .dot { color: var(--green); margin-right: 4px; }
+
+  /* ── MAIN CARD ── */
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 28px; position: relative;
+    transition: box-shadow 0.3s;
+  }
+  .card:focus-within {
+    box-shadow: 0 0 0 1px rgba(230,195,122,0.12), 0 0 50px rgba(230,195,122,0.04);
+  }
+
+  /* ── SECTION LABEL ── */
+  .section-label {
+    font-size: 10px; color: var(--muted); letter-spacing: 0.12em;
+    text-transform: uppercase; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  /* ── PILL ROW ── */
+  .pill-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 24px; }
+
+  .pill {
+    background: transparent; border: 1px solid var(--border);
+    border-radius: 100px; color: var(--muted);
+    font-family: 'Space Mono', monospace; font-size: 11px;
+    padding: 6px 14px; cursor: pointer; letter-spacing: 0.03em;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .pill:hover { border-color: var(--gold-dim); color: var(--text); }
+  .pill.active { background: var(--gold); border-color: var(--gold); color: #000; font-weight: 700; }
+
+  /* ── TEXTAREA ── */
+  .field-wrap { margin-bottom: 24px; }
+
+  textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text);
+    font-family: 'Space Mono', monospace; font-size: 12.5px; line-height: 1.7;
+    padding: 14px 16px; resize: vertical; outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    display: block;
+  }
+  textarea:focus { border-color: rgba(230,195,122,0.4); box-shadow: 0 0 0 3px rgba(230,195,122,0.05); }
+  textarea::placeholder { color: #2e2e38; }
+
+  #lazy-input { min-height: 110px; }
+
+  #output-area {
+    min-height: 160px;
+    color: #c8c4be;
+    font-size: 12px;
+    overflow: hidden;
+    resize: none;
+  }
+
+  /* Shake animation for empty input */
+  @keyframes shake {
+    0%,100% { transform: translateX(0); }
+    15% { transform: translateX(-6px); }
+    30% { transform: translateX(6px); }
+    45% { transform: translateX(-5px); }
+    60% { transform: translateX(5px); }
+    75% { transform: translateX(-3px); }
+    90% { transform: translateX(3px); }
+  }
+  .shake { animation: shake 0.45s ease; border-color: var(--red) !important; box-shadow: 0 0 0 3px rgba(248,113,113,0.12) !important; }
+
+  /* ── FORGE BUTTON ── */
+  .forge-btn {
+    width: 100%;
+    background: linear-gradient(135deg, #E6C37A 0%, #c9a250 50%, #E6C37A 100%);
+    background-size: 200% 200%;
+    border: none; border-radius: var(--radius);
+    color: #000; font-family: 'Syne', sans-serif;
+    font-size: 15px; font-weight: 800; letter-spacing: 0.07em;
+    padding: 15px; cursor: pointer;
+    transition: opacity 0.2s, transform 0.15s;
+    position: relative; overflow: hidden; margin-bottom: 0;
+  }
+  .forge-btn:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
+  .forge-btn:active:not(:disabled) { transform: translateY(0); }
+  .forge-btn:disabled { cursor: not-allowed; opacity: 0.65; }
+  .forge-btn.loading { animation: pulse-gold 1.1s ease-in-out infinite; }
+
+  @keyframes pulse-gold {
+    0%,100% { background-position: 0% 50%; opacity: 1; }
+    50% { background-position: 100% 50%; opacity: 0.72; }
+  }
+
+  /* Pulsing dots */
+  .dots::after {
+    content: '';
+    animation: dots 1.2s steps(4, end) infinite;
+  }
+  @keyframes dots {
+    0%   { content: ''; }
+    25%  { content: '.'; }
+    50%  { content: '..'; }
+    75%  { content: '...'; }
+    100% { content: ''; }
+  }
+
+  /* ── ERROR / WARNING ── */
+  .inline-msg {
+    border-radius: var(--radius); font-size: 11px; line-height: 1.6;
+    padding: 10px 14px; margin-top: 12px; display: none;
+  }
+  .inline-msg.visible { display: block; }
+  .inline-msg.error { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); color: var(--red); }
+  .inline-msg.warning { background: rgba(230,195,122,0.07); border: 1px solid rgba(230,195,122,0.2); color: var(--gold); }
+
+  /* ── OUTPUT SECTION ── */
+  .output-section {
+    opacity: 0; transform: translateY(12px);
+    transition: opacity 0.45s ease, transform 0.45s ease;
+    pointer-events: none; margin-top: 28px;
+  }
+  .output-section.visible { opacity: 1; transform: translateY(0); pointer-events: all; }
+
+  hr.divider { border: none; border-top: 1px solid var(--border); margin-bottom: 24px; }
+
+  .output-footer { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+
+  .copy-btn {
+    background: transparent; border: 1px solid var(--gold);
+    border-radius: var(--radius); color: var(--gold);
+    font-family: 'Space Mono', monospace; font-size: 11px;
+    font-weight: 700; letter-spacing: 0.08em; padding: 8px 18px;
+    cursor: pointer; transition: background 0.2s, color 0.2s, border-color 0.2s;
+  }
+  .copy-btn:hover { background: rgba(230,195,122,0.1); }
+  .copy-btn.copied { background: rgba(74,222,128,0.1); border-color: var(--green); color: var(--green); }
+
+  .word-count { font-size: 10px; color: var(--muted); letter-spacing: 0.05em; margin-left: auto; }
+  .word-count .num { color: var(--gold); font-weight: 700; }
+
+  .target-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: rgba(230,195,122,0.1); border: 1px solid rgba(230,195,122,0.2);
+    border-radius: 100px; padding: 3px 10px;
+    font-size: 10px; color: var(--gold); letter-spacing: 0.06em;
+    margin-left: 6px; vertical-align: middle;
+  }
+
+  /* ── FOOTER ── */
+  footer {
+    text-align: center; margin-top: 48px;
+    font-size: 10px; color: #333339; letter-spacing: 0.06em;
+  }
+  footer span { color: #444450; }
+
+  /* ── KBD HINT ── */
+  .kbd-hint {
+    font-size: 10px; color: var(--muted); margin-top: 8px;
+    text-align: right; letter-spacing: 0.04em;
+  }
+  .kbd {
+    display: inline-block; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 3px; padding: 1px 5px; font-size: 9px; color: var(--muted);
+  }
+
+  @media (max-width: 600px) {
+    .card { padding: 18px 16px; }
+    .logo-name { font-size: 21px; }
+    .pill { font-size: 10px; padding: 5px 10px; }
+  }
+</style>
+</head>
+<body>
+<div class="glow-top"></div>
+<div class="wrap">
+
+  <!-- HEADER -->
+  <header>
+    <div class="logo">
+      <div class="logo-name"><span class="bolt">⚡</span>PromptForge</div>
+      <div class="logo-tag">lazy input <span>→</span> precise output</div>
+    </div>
+    <div class="header-right">
+      <span id="key-badge" class="status-badge key-missing">● NO KEY</span>
+      <button class="gear-btn" id="gear-btn" title="API Key settings">⚙</button>
+    </div>
+  </header>
+
+  <!-- API KEY PANEL -->
+  <div class="api-panel" id="api-panel">
+    <div class="api-panel-inner">
+      <label>Anthropic API Key</label>
+      <div class="api-row">
+        <input type="password" id="api-key-input" placeholder="sk-ant-..." autocomplete="off">
+        <button class="api-save-btn" id="api-save-btn">SAVE</button>
+      </div>
+      <div class="api-note">
+        <span class="dot">●</span>Stored in localStorage — never sent anywhere except api.anthropic.com
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN CARD -->
+  <div class="card">
+
+    <div class="section-label">Target AI Tool</div>
+    <div class="pill-row" id="target-row">
+      <button class="pill active" data-val="Cursor">Cursor</button>
+      <button class="pill" data-val="Claude">Claude</button>
+      <button class="pill" data-val="ChatGPT">ChatGPT</button>
+      <button class="pill" data-val="v0">v0</button>
+      <button class="pill" data-val="Bolt">Bolt</button>
+    </div>
+
+    <div class="section-label">Task Type</div>
+    <div class="pill-row" id="type-row">
+      <button class="pill active" data-val="Bug Fix">Bug Fix</button>
+      <button class="pill" data-val="New Feature">New Feature</button>
+      <button class="pill" data-val="UI Change">UI Change</button>
+      <button class="pill" data-val="Database">Database</button>
+      <button class="pill" data-val="Backend">Backend</button>
+      <button class="pill" data-val="Full Stack">Full Stack</button>
+    </div>
+
+    <div class="field-wrap">
+      <div class="section-label">Describe Your Task (Lazily)</div>
+      <textarea id="lazy-input" placeholder='e.g. "make a login page" or "fix the button that breaks on mobile"'></textarea>
+      <div class="kbd-hint">
+        <span class="kbd">⌘</span> + <span class="kbd">↵</span> to forge
+      </div>
+    </div>
+
+    <button class="forge-btn" id="forge-btn">⚡ FORGE PROMPT</button>
+    <div class="inline-msg" id="inline-msg"></div>
+
+    <!-- OUTPUT -->
+    <div class="output-section" id="output-section">
+      <hr class="divider">
+      <div class="section-label">
+        Your Forged Prompt — Ready to Paste
+        <span id="output-target-badge" class="target-badge"></span>
+      </div>
+      <div class="field-wrap">
+        <textarea id="output-area" readonly></textarea>
+      </div>
+      <div class="output-footer">
+        <button class="copy-btn" id="copy-btn">COPY PROMPT</button>
+        <span class="word-count" id="word-count"></span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<footer>PromptForge — built with <span>Claude</span> · <span id="year"></span></footer>
+
+<script>
+  document.getElementById('year').textContent = new Date().getFullYear();
+
+  // ── STATE ──
+  let apiKey = localStorage.getItem('pf_api_key') || '';
+  let selectedTarget = 'Cursor';
+  let selectedType = 'Bug Fix';
+
+  updateKeyBadge();
+  if (apiKey) document.getElementById('api-key-input').value = apiKey;
+
+  // ── GEAR TOGGLE ──
+  const gearBtn = document.getElementById('gear-btn');
+  const apiPanel = document.getElementById('api-panel');
+  gearBtn.addEventListener('click', () => {
+    const open = apiPanel.classList.toggle('open');
+    gearBtn.classList.toggle('active', open);
+    if (open) document.getElementById('api-key-input').focus();
+  });
+
+  document.getElementById('api-save-btn').addEventListener('click', saveKey);
+  document.getElementById('api-key-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveKey(); });
+
+  function saveKey() {
+    const val = document.getElementById('api-key-input').value.trim();
+    if (!val) return;
+    apiKey = val;
+    localStorage.setItem('pf_api_key', val);
+    updateKeyBadge();
+    apiPanel.classList.remove('open');
+    gearBtn.classList.remove('active');
+    clearMsg();
+  }
+
+  function updateKeyBadge() {
+    const b = document.getElementById('key-badge');
+    if (apiKey) { b.textContent = '● KEY SET'; b.className = 'status-badge key-set'; }
+    else { b.textContent = '● NO KEY'; b.className = 'status-badge key-missing'; }
+  }
+
+  // ── PILL SELECTORS ──
+  function makePillGroup(rowId, onSelect) {
+    document.getElementById(rowId).querySelectorAll('.pill').forEach(pill => {
+      pill.addEventListener('click', () => {
+        document.getElementById(rowId).querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        onSelect(pill.dataset.val);
+      });
+    });
+  }
+  makePillGroup('target-row', v => { selectedTarget = v; });
+  makePillGroup('type-row', v => { selectedType = v; });
+
+  // ── PROMPT ENGINEERING RULES ──
+  const targetRules = {
+    Cursor: `FORMAT FOR CURSOR IDE:
+- Use @filename references to specify exact files to edit (e.g. @components/Button.tsx, @lib/utils.ts)
+- Clearly distinguish between "edit existing file" vs "create new file" for each item
+- Mention any related context files the model should read with @file references
+- Prefer surgical, targeted edits — do not rewrite files unnecessarily
+- Use inline code comments to mark exact insertion points if helpful`,
+
+    Claude: `FORMAT FOR CLAUDE:
+- Structure the prompt with clear labeled sections (Task, Context, Constraints, Output)
+- End with: "Think step by step before writing any code."
+- Be explicit about what success looks like
+- List constraints and edge cases as a numbered checklist
+- Specify exact file names, function signatures, and return types where known`,
+
+    ChatGPT: `FORMAT FOR CHATGPT:
+- Use direct imperative style ("Create...", "Fix...", "Refactor...")
+- Break the request into numbered steps
+- Ask for complete, copy-pasteable code blocks with file paths in a comment at the top
+- State: "Do not truncate code. Show the full implementation."
+- Specify language and framework explicitly in the first line`,
+
+    v0: `FORMAT FOR v0 (Vercel):
+- Lead with the component name and its purpose
+- Describe all props with their types and default values
+- Specify Tailwind CSS classes for key visual states (default, hover, focus, disabled)
+- Note shadcn/ui components to use (e.g. <Button>, <Card>, <Dialog>)
+- Describe the visual layout in detail: spacing, alignment, responsive breakpoints
+- Mention dark mode behavior if relevant`,
+
+    Bolt: `FORMAT FOR BOLT.NEW:
+- Specify the complete tech stack on line one (e.g. "React + Vite + TypeScript + Tailwind CSS + Supabase")
+- List every file to create with its full path
+- Describe the project folder structure
+- Include package.json dependencies if adding new libraries
+- Bolt can scaffold entire apps — be comprehensive and include all features in one prompt`
+  };
+
+  const typeModifiers = {
+    'Bug Fix': `TASK TYPE — BUG FIX:
+- Instruct: "Do not change any code unrelated to this bug."
+- Ask the model to explain the root cause before writing any fix
+- Request a before/after code comparison if helpful
+- Ask to add a comment noting what was fixed and why`,
+
+    'New Feature': `TASK TYPE — NEW FEATURE:
+- Ask for a brief implementation plan (3–5 bullet points) before any code
+- Specify integration points: where the feature hooks into existing code
+- Request that existing tests still pass, or ask for new tests
+- Define the acceptance criteria clearly`,
+
+    'UI Change': `TASK TYPE — UI CHANGE:
+- Require responsive design: specify mobile, tablet, and desktop behavior
+- Mention accessibility requirements (ARIA labels, keyboard navigation, color contrast)
+- Specify dark/light mode handling if the app supports theming
+- Ask to preserve existing class names and component API unless changing them is required`,
+
+    'Database': `TASK TYPE — DATABASE:
+- Specify ORM (e.g. Prisma, Drizzle, TypeORM, SQLAlchemy) or raw SQL
+- Require migration files/scripts, not just schema changes
+- Ask to handle edge cases: null values, foreign key constraints, index strategy
+- Specify whether to seed data or provide rollback instructions`,
+
+    'Backend': `TASK TYPE — BACKEND:
+- Define the full API contract: method, route, request body, response shape, status codes
+- Require error handling for all failure paths with appropriate HTTP status codes
+- Specify authentication/authorization requirements (JWT, session, API key, etc.)
+- Ask for input validation and sanitization
+- Note any rate limiting or logging requirements`,
+
+    'Full Stack': `TASK TYPE — FULL STACK:
+- Split the response into two clearly labeled sections: FRONTEND and BACKEND
+- Define the API contract between them explicitly
+- Specify deployment targets (e.g. Vercel + Railway, Netlify + Supabase)
+- List environment variables needed
+- Ask for a README section covering local dev setup`
+  };
+
+  // ── AUTO-RESIZE TEXTAREA ──
+  function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+  }
+
+  // ── KEYBOARD SHORTCUT ──
+  document.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      forge();
+    }
+  });
+
+  // ── HELPERS ──
+  function showMsg(text, type) {
+    const el = document.getElementById('inline-msg');
+    el.textContent = text;
+    el.className = `inline-msg visible ${type}`;
+  }
+  function clearMsg() {
+    const el = document.getElementById('inline-msg');
+    el.className = 'inline-msg';
+  }
+
+  function shakeTextarea() {
+    const ta = document.getElementById('lazy-input');
+    ta.classList.remove('shake');
+    void ta.offsetWidth; // reflow
+    ta.classList.add('shake');
+    ta.addEventListener('animationend', () => ta.classList.remove('shake'), { once: true });
+  }
+
+  // ── FORGE ──
+  document.getElementById('forge-btn').addEventListener('click', forge);
+
+  async function forge() {
+    const lazyInput = document.getElementById('lazy-input').value.trim();
+    clearMsg();
+
+    if (!apiKey) {
+      showMsg('⚙ No API key set — click the gear icon (top right) to add your Anthropic key.', 'warning');
+      return;
+    }
+    if (!lazyInput) {
+      shakeTextarea();
+      showMsg('Please describe your task before forging.', 'error');
+      document.getElementById('lazy-input').focus();
+      return;
+    }
+
+    const btn = document.getElementById('forge-btn');
+    btn.disabled = true;
+    btn.classList.add('loading');
+    btn.innerHTML = '⚡ FORGING<span class="dots"></span>';
+
+    const systemPrompt = `You are PromptForge, an expert prompt engineer for AI coding assistants.
+
+Transform the user's lazy task description into a precise, professional, ready-to-paste prompt optimized for the specified AI tool.
+
+${targetRules[selectedTarget]}
+
+${typeModifiers[selectedType]}
+
+CRITICAL RULES:
+- Output ONLY the forged prompt. No preamble. No explanation. No markdown code fences. No meta-commentary.
+- The prompt must be ready to paste directly into the target tool.
+- Length: 150–400 words. Be thorough but not padded.
+- Write in a clear, direct, technical register appropriate for a senior developer.`;
+
+    const userMessage = `Target tool: ${selectedTarget}
+Task type: ${selectedType}
+Lazy description: ${lazyInput}`;
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1500,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userMessage }]
+        })
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error?.message || `API error ${res.status}`);
+      }
+
+      const data = await res.json();
+      const output = data.content?.map(b => b.text || '').join('').trim() || '';
+      if (!output) throw new Error('Empty response from API.');
+
+      const outArea = document.getElementById('output-area');
+      outArea.value = output;
+      autoResize(outArea);
+
+      document.getElementById('output-target-badge').textContent = `✦ ${selectedTarget} · ${selectedType}`;
+
+      const words = output.trim().split(/\s+/).length;
+      const chars = output.length;
+      document.getElementById('word-count').innerHTML =
+        `<span class="num">${words}</span> words · <span class="num">${chars}</span> chars`;
+
+      const section = document.getElementById('output-section');
+      section.classList.add('visible');
+      setTimeout(() => section.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100);
+
+    } catch (e) {
+      showMsg('Error: ' + (e.message || 'Something went wrong. Check your API key and try again.'), 'error');
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('loading');
+      btn.innerHTML = '⚡ FORGE PROMPT';
+    }
+  }
+
+  // ── COPY ──
+  document.getElementById('copy-btn').addEventListener('click', () => {
+    const text = document.getElementById('output-area').value;
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.getElementById('copy-btn');
+      btn.textContent = '✓ COPIED!';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'COPY PROMPT'; btn.classList.remove('copied'); }, 2000);
+    });
+  });
+</script>
+</body>
+</html>
